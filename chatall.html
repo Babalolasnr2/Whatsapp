@@ -1,0 +1,256 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Basic Polling Chat App</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f7f6;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .chat-container {
+            width: 90%;
+            max-width: 600px;
+            background-color: white;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 80vh; /* Set a fixed height for the chat window */
+        }
+        .chat-log {
+            flex-grow: 1;
+            padding: 20px;
+            overflow-y: auto; /* Enables scrolling for messages */
+            border-bottom: 1px solid #eee;
+        }
+        .message {
+            margin-bottom: 15px;
+            line-height: 1.4;
+            display: flex;
+            flex-direction: column;
+            max-width: 80%;
+        }
+        .message-content {
+            padding: 10px 15px;
+            border-radius: 20px;
+            word-wrap: break-word;
+        }
+        .message-user {
+            font-size: 0.8em;
+            color: #777;
+            margin-bottom: 2px;
+        }
+        /* Style for 'My' messages */
+        .my-message {
+            align-self: flex-end;
+        }
+        .my-message .message-content {
+            background-color: #007bff;
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+        .my-message .message-user {
+            text-align: right;
+            color: #007bff;
+        }
+        /* Style for 'Other' messages */
+        .other-message {
+            align-self: flex-start;
+        }
+        .other-message .message-content {
+            background-color: #e9e9eb;
+            color: #333;
+            border-bottom-left-radius: 4px;
+        }
+        .input-area {
+            display: flex;
+            padding: 15px;
+            background-color: #fff;
+        }
+        #message-input {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 20px;
+            margin-right: 10px;
+            font-size: 16px;
+        }
+        #send-button {
+            background-color: #28a745;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        #send-button:hover {
+            background-color: #218838;
+        }
+        .info-bar {
+            padding: 10px 20px;
+            background-color: #f0f0f0;
+            text-align: center;
+            font-size: 0.9em;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+
+<div class="chat-container">
+    <div class="info-bar">
+        Polling Chat App | Status: <span id="status-indicator">Connecting...</span> | User: <span id="username-display"></span>
+    </div>
+    <div class="chat-log" id="chat-log">
+        <div class="message other-message">
+             <span class="message-user">System (00:00:00)</span>
+             <span class="message-content">Welcome! Open this page in two browser windows to chat.</span>
+        </div>
+    </div>
+    <div class="input-area">
+        <input type="text" id="message-input" placeholder="Type your message...">
+        <button id="send-button">Send</button>
+    </div>
+</div>
+
+<script>
+    // --- Configuration ---
+    const API_BASE_URL = 'http://127.0.0.1:5000/api';
+    const POLLING_INTERVAL = 1000; // Check for new messages every 1000ms (1 second)
+    
+    // --- State Variables ---
+    const chatLog = document.getElementById('chat-log');
+    let lastMessageId = 0;
+    let username = '';
+
+    // --- Core Functions ---
+
+    /**
+     * Prompts the user for a username and saves it.
+     */
+    function setupUser() {
+        // Use a random default username if the user cancels
+        username = localStorage.getItem('chatUsername');
+        if (!username) {
+            username = prompt("Enter your username:") || `User_${Math.floor(Math.random() * 1000)}`;
+            localStorage.setItem('chatUsername', username);
+        }
+        document.getElementById('username-display').textContent = username;
+    }
+
+    /**
+     * Sends a message to the Python backend.
+     */
+    async function sendMessage() {
+        const inputElement = document.getElementById('message-input');
+        const messageText = inputElement.value.trim();
+
+        if (messageText === "") return;
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/send`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    username: username,
+                    text: messageText
+                }),
+            });
+
+            if (response.ok) {
+                inputElement.value = ''; // Clear input on successful send
+                // Force a poll immediately after sending to see the message
+                fetchMessages(); 
+            } else {
+                console.error('Failed to send message:', await response.json());
+            }
+        } catch (error) {
+            console.error('Network error when sending message:', error);
+        }
+    }
+
+    /**
+     * Fetches all messages from the server and renders only the new ones.
+     */
+    async function fetchMessages() {
+        try {
+            const response = await fetch(`${API_BASE_URL}/messages`);
+            const messages = await response.json();
+            
+            document.getElementById('status-indicator').textContent = 'Connected';
+            document.getElementById('status-indicator').style.color = 'green';
+            
+            // Filter out messages we have already rendered
+            const newMessages = messages.filter(msg => msg.id > lastMessageId);
+            
+            if (newMessages.length > 0) {
+                newMessages.forEach(renderMessage);
+                lastMessageId = newMessages[newMessages.length - 1].id;
+                // Scroll to the bottom of the chat log
+                chatLog.scrollTop = chatLog.scrollHeight;
+            }
+
+        } catch (error) {
+            document.getElementById('status-indicator').textContent = 'Disconnected';
+            document.getElementById('status-indicator').style.color = 'red';
+            console.error('Error fetching messages:', error);
+        }
+    }
+
+    /**
+     * Renders a single message object into the chat log.
+     */
+    function renderMessage(message) {
+        const isMyMessage = message.username === username;
+        
+        const messageDiv = document.createElement('div');
+        messageDiv.classList.add('message');
+        messageDiv.classList.add(isMyMessage ? 'my-message' : 'other-message');
+
+        const userSpan = document.createElement('span');
+        userSpan.classList.add('message-user');
+        userSpan.textContent = `${message.username} (${message.timestamp})`;
+        
+        const contentSpan = document.createElement('span');
+        contentSpan.classList.add('message-content');
+        contentSpan.textContent = message.text;
+
+        messageDiv.appendChild(userSpan);
+        messageDiv.appendChild(contentSpan);
+        chatLog.appendChild(messageDiv);
+    }
+
+    // --- Event Listeners and Initialization ---
+
+    document.addEventListener('DOMContentLoaded', () => {
+        setupUser();
+        
+        document.getElementById('send-button').addEventListener('click', sendMessage);
+        
+        document.getElementById('message-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+        
+        // Start the continuous polling for new messages
+        fetchMessages(); // Fetch immediately on load
+        setInterval(fetchMessages, POLLING_INTERVAL);
+    });
+</script>
+
+</body>
+</html>
