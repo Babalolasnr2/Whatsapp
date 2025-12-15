@@ -1,3 +1,8 @@
-Flask==2.3.3
-Flask-CORS==4.0.0
-gunicorn==20.1.0
+
+Flask
+Flask-SocketIO
+Flask-CORS
+gunicorn
+eventlet
+python-engineio
+python-socketio
