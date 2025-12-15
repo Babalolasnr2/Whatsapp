@@ -1,61 +1,114 @@
-from flask import Flask, request, jsonify
+from flask import Flask, render_template, request
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
-import time
+from datetime import datetime
 
-# --- Setup ---
 app = Flask(__name__)
-# Enable CORS for development so the HTML file can talk to the server
-CORS(app)
+# Enable CORS for all origins, which is often necessary for SocketIO testing
+CORS(app, resources={r"/*": {"origins": "*"}}) 
 
-# A simple list to store the chat messages
-# In a real application, this would be a database.
-chat_messages = []
-# Tracks the ID for new messages
-message_id_counter = 1
+# Use a non-default secret key
+app.config['SECRET_KEY'] = 'your_secret_key_here' 
 
-# --- API Endpoints ---
+# Initialize SocketIO with a message queue if you use async workers (optional)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
-@app.route('/api/messages', methods=['GET'])
-def get_messages():
-    """Returns the current list of chat messages."""
-    # We return the entire list for simplicity, but in a production app, 
-    # we would only return new messages (polling).
-    return jsonify(chat_messages)
+# --- State Management ---
+# Key: 'room_id' (e.g., 'chat_room'), Value: Set of active SIDs (session IDs)
+online_users = {}
+ROOM_ID = 'main_chat_room' # Simplicity for a 2-person chat
 
-@app.route('/api/send', methods=['POST'])
-def send_message():
-    """Receives a new message and adds it to the list."""
-    global message_id_counter
+# --- Routes ---
+
+@app.route('/')
+def index():
+    """Renders the main chat page."""
+    return render_template('index.html')
+
+# --- SocketIO Event Handlers ---
+
+@socketio.on('connect')
+def handle_connect():
+    """Handles a new client connection."""
+    user_sid = request.sid
+    join_room(ROOM_ID)
     
-    # Get the JSON data sent from the JavaScript frontend
-    data = request.json
+    # Track the user as online
+    if ROOM_ID not in online_users:
+        online_users[ROOM_ID] = set()
+    online_users[ROOM_ID].add(user_sid)
     
-    if not data or 'username' not in data or 'text' not in data:
-        return jsonify({'error': 'Missing username or text'}), 400
+    print(f"User {user_sid} connected and joined room {ROOM_ID}")
+    
+    # Notify everyone in the room about the updated online count
+    update_online_status()
 
-    # Create the new message object
-    new_message = {
-        'id': message_id_counter,
-        'username': data['username'],
-        'text': data['text'],
-        'timestamp': time.strftime('%H:%M:%S', time.localtime())
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handles a client disconnecting."""
+    user_sid = request.sid
+    if ROOM_ID in online_users and user_sid in online_users[ROOM_ID]:
+        online_users[ROOM_ID].remove(user_sid)
+    
+    print(f"User {user_sid} disconnected from room {ROOM_ID}")
+    
+    leave_room(ROOM_ID)
+    
+    # Notify everyone in the room about the updated online count
+    update_online_status()
+
+@socketio.on('send_message')
+def handle_message(data):
+    """Handles incoming chat messages from a client."""
+    
+    # 1. Prepare Message Data
+    sender_id = request.sid
+    message_text = data['message']
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Determine read/delivery status based on the current number of online users
+    online_count = len(online_users.get(ROOM_ID, set()))
+    
+    # 1 mark (delivered) if online_count is 1 (only sender)
+    # 2 marks (read/seen) if online_count is 2 (sender + recipient)
+    status_marks = 1 if online_count == 1 else 2
+    
+    # 2. Compile Final Message Data
+    final_message = {
+        'sender_id': sender_id,
+        'text': message_text,
+        'time': timestamp,
+        'status': status_marks,
+        # A simple way to differentiate sender/recipient on the client
+        'is_me': request.sid == sender_id 
     }
 
-    # Add the message to our global list
-    chat_messages.append(new_message)
-    message_id_counter += 1
+    # 3. Broadcast the message to all clients in the room
+    # 'include_self=True' means the sender also receives their own message
+    emit('receive_message', final_message, room=ROOM_ID)
     
-    # Return success confirmation
-    return jsonify({'status': 'Message received', 'message_id': new_message['id']}), 201
+    # Update the status marks for all messages
+    if status_marks == 2:
+        # If the count is 2, it means the other user just came online
+        # We should tell the client to update any *previous* 1-mark messages to 2-marks
+        # Note: A real app would track this in a database. Here we just trigger a status update.
+        socketio.emit('update_read_status', {'status': 2}, room=ROOM_ID)
 
-# --- Run Server ---
+
+def update_online_status():
+    """Emits the current online count to all clients."""
+    online_count = len(online_users.get(ROOM_ID, set()))
+    
+    # Indicate to the client if the recipient is online (online_count == 2)
+    recipient_is_online = online_count == 2
+    
+    emit('status_update', 
+         {'online_count': online_count, 
+          'recipient_online': recipient_is_online}, 
+         room=ROOM_ID, 
+         include_self=True)
 
 if __name__ == '__main__':
-    print("Starting Flask server...")
-    print("API is available at http://127.0.0.1:5000")
-    print("Open index.html in your browser.")
-    # Run the app on port 5000
-    app.run(debug=True, port=5000)
-
-
-
+    # Use '0.0.0.0' for external access if needed, otherwise '127.0.0.1'
+    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    
