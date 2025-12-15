@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Two-Person Chat App</title>
+    <style>
+        body { font-family: sans-serif; margin: 0; background: #f4f4f9; display: flex; justify-content: center; }
+        #chat-container { width: 400px; height: 100vh; background: #fff; box-shadow: 0 0 10px rgba(0,0,0,0.1); display: flex; flex-direction: column; }
+        #header { padding: 10px; background: #007bff; color: white; text-align: center; }
+        #status-indicator { font-size: 0.8em; margin-top: 5px; }
+        #messages { flex-grow: 1; padding: 10px; overflow-y: auto; list-style: none; margin: 0; }
+        .message-bubble { 
+            max-width: 70%; 
+            padding: 8px 12px; 
+            margin-bottom: 10px; 
+            border-radius: 20px; 
+            word-wrap: break-word; 
+            clear: both;
+        }
+        .sender { background-color: #dcf8c6; float: right; margin-left: auto; }
+        .recipient { background-color: #f1f0f0; float: left; margin-right: auto; }
+        .message-info { font-size: 0.7em; color: #888; margin-top: 3px; text-align: right; }
+        .status-marks { float: right; margin-left: 5px; color: #4fc3f7; }
+        #input-area { padding: 10px; border-top: 1px solid #ddd; display: flex; }
+        #message-input { flex-grow: 1; padding: 8px; border-radius: 20px; border: 1px solid #ddd; margin-right: 10px; }
+        #send-button { background-color: #007bff; color: white; border: none; padding: 8px 15px; border-radius: 20px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div id="chat-container">
+        <div id="header">
+            <h2>Chat Room</h2>
+            <div id="status-indicator">Connecting...</div>
+        </div>
+        <ul id="messages">
+            </ul>
+        <div id="input-area">
+            <input type="text" id="message-input" placeholder="Type a message..." />
+            <button id="send-button">Send</button>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script>
+        // Connect to the Flask server's SocketIO endpoint
+        const socket = io(); // Connects to the same host/port the page was served from (e.g., http://localhost:5000)
+        
+        const messagesEl = document.getElementById('messages');
+        const inputEl = document.getElementById('message-input');
+        const sendBtn = document.getElementById('send-button');
+        const statusIndicatorEl = document.getElementById('status-indicator');
+
+        // Simple way to identify this client uniquely on the frontend
+        const mySid = socket.id; 
+
+        // --- Event Listeners ---
+        
+        sendBtn.addEventListener('click', sendMessage);
+        inputEl.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        // --- SocketIO Handlers ---
+
+        // 1. Connection Event
+        socket.on('connect', () => {
+            console.log('Connected to server with SID:', socket.id);
+            // Re-assign mySid once the connection is established
+            mySid = socket.id; 
+            statusIndicatorEl.textContent = 'Connected. Waiting for recipient...';
+        });
+
+        // 2. Message Reception
+        socket.on('receive_message', (data) => {
+            appendMessage(data);
+        });
+
+        // 3. Online Status Update
+        socket.on('status_update', (data) => {
+            const onlineCount = data.online_count;
+            const recipientOnline = data.recipient_online;
+            
+            if (recipientOnline) {
+                statusIndicatorEl.textContent = 'Recipient is Online';
+            } else {
+                statusIndicatorEl.textContent = 'Recipient is Offline';
+            }
+        });
+
+        // 4. Read Status Update (when the other user connects)
+        socket.on('update_read_status', (data) => {
+            if (data.status === 2) {
+                // Find all 1-mark status elements and change them to 2 marks
+                document.querySelectorAll('.status-marks[data-status="1"]').forEach(el => {
+                    el.innerHTML = '&#10003;&#10003;'; // Double check mark
+                    el.setAttribute('data-status', '2');
+                });
+            }
+        });
+
+        // --- Core Functions ---
+
+        function sendMessage() {
+            const message = inputEl.value.trim();
+            if (message === '') return;
+
+            // Send the message to the server
+            socket.emit('send_message', { message: message });
+
+            inputEl.value = ''; // Clear the input field
+        }
+
+        function appendMessage(data) {
+            const li = document.createElement('li');
+            li.classList.add('message-bubble');
+            
+            // Determine if the message is from me (the sender) or the recipient
+            // We use the sender_id from the server which is this client's SID
+            const isMe = data.sender_id === mySid; 
+            
+            li.classList.add(isMe ? 'sender' : 'recipient');
+
+            li.innerHTML = `
+                <span>${data.text}</span>
+                <div class="message-info">
+                    <span class="message-time">${data.time}</span>
+                    ${isMe ? `<span class="status-marks" data-status="${data.status}">${getStatusIcon(data.status)}</span>` : ''}
+                </div>
+            `;
+            
+            messagesEl.appendChild(li);
+            // Scroll to the latest message
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+        
+        function getStatusIcon(status) {
+            if (status === 1) {
+                return '&#10003;'; // Single check mark (Delivered)
+            } else if (status === 2) {
+                return '&#10003;&#10003;'; // Double check mark (Read/Seen)
+            }
+            return '';
+        }
+
+    </script>
+</body>
+</html>
